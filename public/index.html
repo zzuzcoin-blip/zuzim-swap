@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ZUZIM Swap</title>
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.10.0/dist/web3.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0A0A0A; color: white; font-family: system-ui, sans-serif; padding: 20px; }
+        .container { max-width: 500px; margin: 0 auto; }
+        .card { background: #1A1A1A; border-radius: 24px; padding: 20px; margin-bottom: 16px; border: 1px solid #D4AF37; }
+        .btn { background: #D4AF37; color: #000; border: none; padding: 14px; border-radius: 40px; font-weight: bold; width: 100%; margin-top: 12px; cursor: pointer; }
+        .btn-secondary { background: #333; color: #D4AF37; border: 1px solid #D4AF37; }
+        .balance { font-size: 32px; font-weight: bold; color: #D4AF37; }
+        .address { font-family: monospace; font-size: 12px; background: #0A0A0A; padding: 10px; border-radius: 16px; word-break: break-all; }
+        .input-group { display: flex; gap: 10px; margin: 12px 0; }
+        input { flex: 1; background: #0A0A0A; border: 1px solid #333; padding: 12px; border-radius: 40px; color: white; }
+        .flex { display: flex; justify-content: space-between; align-items: center; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="card" style="text-align: center;">
+        <div style="font-size: 28px; font-weight: bold;">ZUZIM SWAP</div>
+        <div style="color: #888;">Обменяй ETH на ZUZ</div>
+    </div>
+
+    <div class="card">
+        <div class="flex">
+            <span>💰 Ваш баланс ZUZ</span>
+            <span class="balance" id="zuzBalance">0</span>
+        </div>
+        <div class="address" id="walletAddress">Кошелёк не подключён</div>
+        <button class="btn" id="connectBtn">🔌 ПОДКЛЮЧИТЬ КОШЕЛЁК</button>
+    </div>
+
+    <div class="card">
+        <div class="flex">
+            <span>🪙 Покупка ZUZ</span>
+            <span>1 ZUZ = 0.0001 ETH</span>
+        </div>
+        <div class="input-group">
+            <input type="number" id="ethAmount" placeholder="Сумма в ETH (мин 0.01)" step="0.01">
+            <button class="btn-secondary" id="buyBtn" style="width: auto; padding: 12px 20px;">Купить</button>
+        </div>
+        <div class="flex">
+            <span>Вы получите:</span>
+            <strong id="receiveZuz">0 ZUZ</strong>
+        </div>
+    </div>
+
+    <div class="card">
+        <button class="btn-secondary" id="refreshBtn">🔄 Обновить баланс</button>
+    </div>
+</div>
+
+<script>
+    let web3 = null;
+    let account = null;
+    let telegramId = null;
+
+    // Получаем Telegram ID
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+        tg.ready();
+        tg.expand();
+        telegramId = tg.initDataUnsafe?.user?.id;
+    }
+
+    const API_URL = window.location.origin;
+
+    // Подключение кошелька
+    document.getElementById('connectBtn').onclick = async () => {
+        if (window.ethereum) {
+            try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                account = accounts[0];
+                web3 = new Web3(window.ethereum);
+                document.getElementById('walletAddress').innerHTML = account.slice(0,6)+'...'+account.slice(-4);
+                document.getElementById('connectBtn').innerHTML = '✅ КОШЕЛЁК ПОДКЛЮЧЁН';
+                
+                // Регистрируем кошелёк в базе
+                await fetch(`${API_URL}/api/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_id: telegramId, address: account })
+                });
+                
+                loadBalance();
+            } catch(e) {
+                alert('Ошибка подключения кошелька');
+            }
+        } else {
+            alert('Установите MetaMask или Trust Wallet');
+        }
+    };
+
+    // Загрузка баланса ZUZ
+    async function loadBalance() {
+        if (!telegramId) return;
+        const res = await fetch(`${API_URL}/api/balance/${telegramId}`);
+        const data = await res.json();
+        document.getElementById('zuzBalance').innerText = data.balance.toFixed(0);
+    }
+
+    // Покупка ZUZ
+    document.getElementById('buyBtn').onclick = async () => {
+        if (!account) {
+            alert('Сначала подключите кошелёк');
+            return;
+        }
+        const eth = parseFloat(document.getElementById('ethAmount').value);
+        if (isNaN(eth) || eth < 0.01) {
+            alert('Минимальная покупка 0.01 ETH');
+            return;
+        }
+        
+        const wei = web3.utils.toWei(eth.toString(), 'ether');
+        try {
+            const tx = await window.ethereum.request({
+                method: 'eth_sendTransaction',
+                params: [{
+                    from: account,
+                    to: '0x8CdeBa5Db0a4046D8BBC655244173750c7DFd553',
+                    value: wei
+                }]
+            });
+            
+            // Отправляем подтверждение на сервер
+            await fetch(`${API_URL}/api/buy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ telegram_id: telegramId, ethAmount: eth, txHash: tx })
+            });
+            
+            alert(`✅ Куплено ${(eth / 0.0001).toFixed(0)} ZUZ!`);
+            document.getElementById('ethAmount').value = '';
+            document.getElementById('receiveZuz').innerText = '0 ZUZ';
+            loadBalance();
+        } catch(e) {
+            alert('Ошибка транзакции');
+        }
+    };
+
+    // Обновление суммы к получению
+    document.getElementById('ethAmount').oninput = () => {
+        const eth = parseFloat(document.getElementById('ethAmount').value) || 0;
+        const zuz = eth / 0.0001;
+        document.getElementById('receiveZuz').innerText = zuz.toFixed(0) + ' ZUZ';
+    };
+
+    document.getElementById('refreshBtn').onclick = loadBalance;
+
+    // Автозагрузка баланса
+    loadBalance();
+</script>
+</body>
+</html>
